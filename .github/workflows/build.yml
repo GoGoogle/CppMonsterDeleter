@@ -11,7 +11,7 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Setup MSVC (C++ Compiler)
       uses: ilammy/msvc-dev-cmd@v1
@@ -23,7 +23,7 @@ jobs:
         cl.exe /O1 /MT /EHsc main.cpp user32.lib gdi32.lib shell32.lib advapi32.lib gdiplus.lib winmm.lib /link /SUBSYSTEM:WINDOWS /OUT:MonsterDeleter.exe
         
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: MonsterDeleter-Minimal
         path: |
