@@ -13,10 +13,10 @@ using namespace Gdiplus;
 // =========================================================================================
 // 【硬编码 Unicode 字符串区域】 (彻底杜绝任何环境下的中文乱码问题)
 // =========================================================================================
-const wchar_t* MENU_NAME = L"\u53EC\u5524\u5927\u5C06\u602A\u517D\u6467\u6BC1(X)"; // "召唤大将怪兽摧毁(X)"
+const wchar_t* MENU_NAME = L"\u53EC\u5524\u5927\u5C06\u602A\u517D\u6467\u6BC1(&X)"; // "召唤大将怪兽摧毁(&X)"
 const wchar_t* MSG_REG_SUCCESS = L"\u2705 \u53F3\u952E\u83DC\u5355\u5B89\u88C5\u6210\u529F\uFF01"; // "✅ 右键菜单安装成功！"
 const wchar_t* MSG_UNREG_SUCCESS = L"\U0001F5D1 \u53F3\u952E\u83DC\u5355\u5DF2\u5378\u8F7D\uFF01"; // "🗑️ 右键菜单已卸载！"
-const wchar_t* MSG_PROMPT = L"\u662F\u5426\u8981\u5B89\u88C5[\u5927\u5C06\u602A\u517D(X)]\u53F3\u952E\u83DC\u5355\uFF1F\n\n[Yes]: \u5B89\u88C5\n[No]: \u5378\u8F7D\n[Cancel]: \u9000\u51FA"; 
+const wchar_t* MSG_PROMPT = L"\u662F\u5426\u8981\u5B89\u88C5[\u5927\u5C06\u602A\u517D(&X)]\u53F3\u952E\u83DC\u5355\uFF1F\n\n[Yes]: \u5B89\u88C5\n[No]: \u5378\u8F7D\n[Cancel]: \u9000\u51FA"; 
 
 // 动画中的文本
 const wchar_t* TEXT_LOCKING = L"\u76EE\u6807\u9501\u5B9A\uFF1A"; // "目标锁定："
@@ -95,10 +95,9 @@ int SendToTrash(const std::wstring& path) {
 }
 
 // =========================================================================================
-// 【核心功能：强力解除占用并删除 (自包含独立实现，免 SDK 头文件依赖)】
+// 【核心功能：强力解除占用并删除 (自包含独立实现)】
 // =========================================================================================
 bool ForceUnlockAndDelete(const std::wstring& path) {
-    // 构造 PowerShell 命令：自动识别占用该文件的进程并强行结束，随后将其安全移入回收站
     std::wstring psCmd = L"powershell -NoProfile -Command \"$path = \'" + path + L"\'; "
         L"$lockers = Get-Process | Where-Object { try { $_.Modules.FileName -eq $path } catch { $false } }; "
         L"if ($lockers) { $lockers | Stop-Process -Force }; "
@@ -111,12 +110,11 @@ bool ForceUnlockAndDelete(const std::wstring& path) {
     PROCESS_INFORMATION pi;
 
     if (CreateProcessW(NULL, (LPWSTR)psCmd.c_str(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-        WaitForSingleObject(pi.hProcess, 4000); // 等待最多 4 秒执行完毕
+        WaitForSingleObject(pi.hProcess, 4000); 
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     }
 
-    // 检查文件是否已被成功移除
     DWORD attrs = GetFileAttributesW(path.c_str());
     return (attrs == INVALID_FILE_ATTRIBUTES);
 }
@@ -309,7 +307,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (wParam == VK_ESCAPE) {
                 PostQuitMessage(0); 
             } 
-            // 核心功能：当处于文件占用提示状态时，按下 X 键强行解除占用并摧毁！
             else if (isFileInUse && (wParam == 'X' || wParam == 'x')) {
                 if (ForceUnlockAndDelete(targetFile)) {
                     isFileInUse = false;
