@@ -22,6 +22,12 @@ std::wstring targetFile = L"";
 int tick = 0; // 动画帧计数器
 const int ANIM_TOTAL_TICKS = 80;
 
+// 记录文件打击的坐标 (全局变量)
+int targetX = 0;
+int targetY = 0;
+int vScreenX = 0;
+int vScreenY = 0;
+
 // 粒子特效结构体
 struct Particle {
     float x, y, vx, vy;
@@ -87,10 +93,11 @@ void RenderFrame(HWND hwnd, HDC hdcBase) {
     // 绘制纯黑背景（配合窗口透明度形成磨砂暗场）
     g.Clear(Color(15, 15, 15));
 
-    int cx = width / 2;
-    int cy = height / 2;
+    // 使用捕获到的鼠标物理坐标作为打击中心
+    int cx = targetX;
+    int cy = targetY;
 
-    // 屏幕震动效果 (激光命中瞬间)
+    // 屏幕震动效果 (激光命中瞬间，整个坐标系剧烈抖动)
     if (tick >= 35 && tick <= 45) {
         cx += (rand() % 20) - 10;
         cy += (rand() % 20) - 10;
@@ -187,10 +194,18 @@ void RenderFrame(HWND hwnd, HDC hdcBase) {
 // 窗口过程函数
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
-        case WM_CREATE:
+        case WM_CREATE: {
+            // 在程序启动的瞬间，抓取当前鼠标坐标（也就是用户右键点击文件的位置）
+            POINT pt;
+            GetCursorPos(&pt);
+            // 减去虚拟屏幕左上角的偏移量，以完美兼容多显示器
+            targetX = pt.x - vScreenX;
+            targetY = pt.y - vScreenY;
+
             SetLayeredWindowAttributes(hwnd, 0, 215, LWA_ALPHA); // 整体半透明暗场
             SetTimer(hwnd, 1, 30, NULL); // 30ms 刷新率 (约 33 帧/秒)
             break;
+        }
 
         case WM_KEYDOWN:
             if (wParam == VK_ESCAPE) PostQuitMessage(0); 
@@ -256,11 +271,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.hCursor = LoadCursor(NULL, IDC_CROSS); // 变为十字光标
     RegisterClassW(&wc);
 
+    // 获取虚拟屏幕(所有显示器总和)的坐标和大小，支持多屏无缝打击
+    vScreenX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    vScreenY = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    int vScreenWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    int vScreenHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
     HWND hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         L"MonsterDeleterClass", L"Monster Deleter",
         WS_POPUP | WS_VISIBLE,
-        0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+        vScreenX, vScreenY, vScreenWidth, vScreenHeight,
         NULL, NULL, hInstance, NULL
     );
 
