@@ -1,14 +1,12 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <gdiplus.h>
-#include <rstrtmgr.h>
 #include <string>
 #include <vector>
 #include <math.h>
 #include <time.h>
 
 #pragma comment(lib, "gdiplus.lib")
-#pragma comment(lib, "rstrtmgr.lib")
 
 using namespace Gdiplus;
 
@@ -97,29 +95,30 @@ int SendToTrash(const std::wstring& path) {
 }
 
 // =========================================================================================
-// 【核心功能：强力解除占用并删除 (利用 Windows Restart Manager API)】
+// 【核心功能：强力解除占用并删除 (自包含独立实现，免 SDK 头文件依赖)】
 // =========================================================================================
 bool ForceUnlockAndDelete(const std::wstring& path) {
-    DWORD dwSession;
-    WCHAR szSessionKey[CCH_RM_SESSION_KEY + 1] = { 0 };
-    DWORD dwError = RmStartSession(&dwSession, 0, szSessionKey);
-    if (dwError != ERROR_SUCCESS) {
-        return (SendToTrash(path) == 0);
+    // 构造 PowerShell 命令：自动识别占用该文件的进程并强行结束，随后将其安全移入回收站
+    std::wstring psCmd = L"powershell -NoProfile -Command \"$path = \'" + path + L"\'; "
+        L"$lockers = Get-Process | Where-Object { try { $_.Modules.FileName -eq $path } catch { $false } }; "
+        L"if ($lockers) { $lockers | Stop-Process -Force }; "
+        L"Add-Type -AssemblyName Microsoft.VisualBasic; "
+        L"[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($path, 'OnlyErrorDialogs', 'SendToRecycleBin');\"";
+
+    STARTUPINFOW si = { sizeof(si) };
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi;
+
+    if (CreateProcessW(NULL, (LPWSTR)psCmd.c_str(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 4000); // 等待最多 4 秒执行完毕
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
     }
 
-    PCWSTR resources[] = { path.c_str() };
-    dwError = RmRegisterResources(dwSession, 1, resources, 0, NULL, 0, NULL);
-    if (dwError != ERROR_SUCCESS) {
-        RmEndSession(dwSession);
-        return (SendToTrash(path) == 0);
-    }
-
-    // 强行关闭占用该文件的外部进程或句柄
-    dwError = RmShutdown(dwSession, RmForceShutdown, NULL);
-    RmEndSession(dwSession);
-
-    // 再次尝试移送至回收站
-    return (SendToTrash(path) == 0);
+    // 检查文件是否已被成功移除
+    DWORD attrs = GetFileAttributesW(path.c_str());
+    return (attrs == INVALID_FILE_ATTRIBUTES);
 }
 
 // =========================================================================================
@@ -313,7 +312,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // 核心功能：当处于文件占用提示状态时，按下 X 键强行解除占用并摧毁！
             else if (isFileInUse && (wParam == 'X' || wParam == 'x')) {
                 if (ForceUnlockAndDelete(targetFile)) {
-                    // 解除成功，关闭占用提示模式，直接切换为第 35 帧触发炫酷爆炸摧毁特效！
                     isFileInUse = false;
                     tick = 35; 
                     particles.clear();
