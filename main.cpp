@@ -1,12 +1,14 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <gdiplus.h>
+#include <mmsystem.h>
 #include <string>
 #include <vector>
 #include <math.h>
 #include <time.h>
 
 #pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "winmm.lib")
 
 using namespace Gdiplus;
 
@@ -80,6 +82,47 @@ void UnregisterContextMenu() {
     std::wstring keyPath = L"Software\\Classes\\*\\shell\\SummonMonster";
     RegDeleteKeyW(HKEY_CURRENT_USER, keyPath.c_str());
     MessageBoxW(NULL, MSG_UNREG_SUCCESS, L"Monster Deleter", MB_OK | MB_ICONINFORMATION);
+}
+
+// =========================================================================================
+// 【核心功能：音效与 MIDI 音乐控制】
+// =========================================================================================
+void PlaySystemSound() {
+    wchar_t windir[MAX_PATH];
+    if (GetEnvironmentVariableW(L"WINDIR", windir, MAX_PATH) > 0) {
+        std::wstring soundPath = std::wstring(windir) + L"\\Media\\Windows Recycle.wav";
+        if (GetFileAttributesW(soundPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            PlaySoundW(soundPath.c_str(), NULL, SND_FILENAME | SND_ASYNC);
+            return;
+        }
+        std::wstring fallbackPath = std::wstring(windir) + L"\\Media\\Windows Ding.wav";
+        if (GetFileAttributesW(fallbackPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            PlaySoundW(fallbackPath.c_str(), NULL, SND_FILENAME | SND_ASYNC);
+        }
+    }
+}
+
+// 播放 town.mid（如存在则使用 MCI 播放，否则回退到系统音效）
+void PlayTownAudio() {
+    wchar_t windir[MAX_PATH];
+    if (GetEnvironmentVariableW(L"WINDIR", windir, MAX_PATH) > 0) {
+        std::wstring midPath = std::wstring(windir) + L"\\Media\\town.mid";
+        if (GetFileAttributesW(midPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            std::wstring openCmd = L"open \"" + midPath + L"\" type sequencer alias town_midi";
+            if (mciSendStringW(openCmd.c_str(), NULL, 0, NULL) == 0) {
+                mciSendStringW(L"play town_midi", NULL, 0, NULL);
+                return; 
+            }
+        }
+    }
+    // 回退机制
+    PlaySystemSound();
+}
+
+// 立即停止并关闭 MCI 播放的 MIDI 音乐
+void StopTownAudio() {
+    mciSendStringW(L"stop town_midi", NULL, 0, NULL);
+    mciSendStringW(L"close town_midi", NULL, 0, NULL);
 }
 
 // =========================================================================================
@@ -301,6 +344,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CREATE: 
             SetLayeredWindowAttributes(hwnd, 0, 215, LWA_ALPHA); 
             SetTimer(hwnd, 1, 30, NULL); 
+            PlayTownAudio(); // 动画窗口弹出时检测并播放 town.mid 或备用音效
             break;
 
         case WM_KEYDOWN:
@@ -350,6 +394,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_DESTROY:
+            StopTownAudio(); // 动画消失/窗口销毁瞬间立刻停止音乐，实现戛然而止
             PostQuitMessage(0);
             break;
 
