@@ -14,7 +14,8 @@ using namespace Gdiplus;
 // \u53EC\u5524\u5927\u5C06\u602A\u517D\u6467\u6BC1 = "召唤大将怪兽摧毁"
 const wchar_t* MENU_NAME = L"\u53EC\u5524\u5927\u5C06\u602A\u517D\u6467\u6BC1"; 
 const wchar_t* MSG_REG_SUCCESS = L"\u2705 \u53F3\u952E\u83DC\u5355\u5B89\u88C5\u6210\u529F\uFF01"; // ✅ 右键菜单安装成功！
-const wchar_t* MSG_UNREG_SUCCESS = L"\uD83D\uDDD1 \u53F3\u952E\u83DC\u5355\u5DF2\u5378\u8F7D\uFF01"; // 🗑️ 右键菜单已卸载！
+// 修复 MSVC 编译错误：Emoji 必须使用大写 \U 加上 8 位十六进制
+const wchar_t* MSG_UNREG_SUCCESS = L"\U0001F5D1 \u53F3\u952E\u83DC\u5355\u5DF2\u5378\u8F7D\uFF01"; // 🗑️ 右键菜单已卸载！
 const wchar_t* MSG_PROMPT = L"\u662F\u5426\u8981\u5B89\u88C5[\u5927\u5C06\u602A\u517D]\u53F3\u952E\u83DC\u5355\uFF1F\n\n[Yes]: \u5B89\u88C5\n[No]: \u5378\u8F7D\n[Cancel]: \u9000\u51FA"; // 安装提示信息
 
 std::wstring targetFile = L"";
