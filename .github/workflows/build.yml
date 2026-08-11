@@ -1,0 +1,31 @@
+name: Build C++ EXE
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: # 允许手动点击按钮触发
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Setup MSVC (C++ Compiler)
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Compile C++ Source Code
+      run: |
+        # 使用 MSVC 编译器编译 main.cpp
+        # /O1 (体积最小化) /MT (静态链接，无需安装运行库)
+        cl.exe /O1 /MT /EHsc main.cpp user32.lib gdi32.lib shell32.lib advapi32.lib gdiplus.lib winmm.lib /link /SUBSYSTEM:WINDOWS /OUT:MonsterDeleter.exe
+        
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: MonsterDeleter-Minimal
+        path: |
+          MonsterDeleter.exe
+          assets/
