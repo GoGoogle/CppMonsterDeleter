@@ -22,11 +22,14 @@ const wchar_t* MSG_PROMPT = L"\u662F\u5426\u8981\u5B89\u88C5[\u5927\u5C06\u602A\
 
 // 动画中的文本
 const wchar_t* TEXT_LOCKING = L"\u76EE\u6807\u9501\u5B9A\uFF1A"; // "目标锁定："
-const wchar_t* TEXT_BOOM = L"\u5927\u5C06\u602A\u517D\u6B63\u5728\u6467\u6BC1"; // "大将怪兽正在摧毁"
+const wchar_t* TEXT_BOOM = L"\u6B63\u5728\u88ab\u5927\u5C06\u602A\u517D\u6467\u6BC1"; // "正在被大将怪兽摧毁"
 
 // 高雅的文件占用提示（附带按 X 键破局指引）
 const wchar_t* TEXT_IN_USE = L"\u6B64\u7269\u6B63\u8426\u7ED5\u4E8E\u5C18\u4E16\u4E4B\u52A1\uFF0C\u6682\u4E0D\u53EF\u53BB\u3002\n\u8BF7\u6309 \u3010X\u3011 \u952E\u5F3A\u884C\u89E3\u9664\u7F81\u7ECA\uFF0C\u518D\u884C\u8D85\u5EA6\u3002";
 const wchar_t* TITLE_NOTICE = L"\u5927\u5C06\u602A\u517D\u63D0\u793A"; // "大将怪兽提示"
+
+// 自定义窗口消息：用于多窗口间的同步联动
+#define WM_APP_TRIGGER_EXPLOSION (WM_APP + 1)
 
 // =========================================================================================
 // 【全局变量与状态定义】
@@ -37,14 +40,16 @@ int tick = 0;                    // 动画帧计数器
 const int ANIM_TOTAL_TICKS = 90; // 正常动画总帧数
 
 // 占用状态控制：当文件被占用时切换为 10 秒长效显示模式 (约 330 帧)
-bool isFileInUse = false;        
+bool g_globalInUse = false;      
 const int IN_USE_TOTAL_TICKS = 330; 
 
-// 记录多屏幕系统的虚拟坐标起点和宽高
-int vScreenX = 0;
-int vScreenY = 0;
-int vScreenWidth = 0;
-int vScreenHeight = 0;
+// 性能优化：启动时预先缓存的 MIDI 状态与路径（避免动画播放时产生任何 I/O 延迟）
+bool g_hasTownMid = false;
+std::wstring g_cachedTownMidPath = L"";
+bool g_audioStarted = false;     // 确保多屏同时弹出时只播放一次音乐
+
+// 保存所有屏幕窗口句柄，用于多屏状态同步
+std::vector<HWND> g_allHwnds;
 
 // 物理爆炸粒子结构体
 struct Particle {
@@ -102,20 +107,15 @@ void PlaySystemSound() {
     }
 }
 
-// 播放 town.mid（如存在则使用 MCI 播放，否则回退到系统音效）
+// 直接调用缓存好的路径播放（无任何文件存在性检查的性能开销）
 void PlayTownAudio() {
-    wchar_t windir[MAX_PATH];
-    if (GetEnvironmentVariableW(L"WINDIR", windir, MAX_PATH) > 0) {
-        std::wstring midPath = std::wstring(windir) + L"\\Media\\town.mid";
-        if (GetFileAttributesW(midPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            std::wstring openCmd = L"open \"" + midPath + L"\" type sequencer alias town_midi";
-            if (mciSendStringW(openCmd.c_str(), NULL, 0, NULL) == 0) {
-                mciSendStringW(L"play town_midi", NULL, 0, NULL);
-                return; 
-            }
+    if (g_hasTownMid) {
+        std::wstring openCmd = L"open \"" + g_cachedTownMidPath + L"\" type sequencer alias town_midi";
+        if (mciSendStringW(openCmd.c_str(), NULL, 0, NULL) == 0) {
+            mciSendStringW(L"play town_midi", NULL, 0, NULL);
+            return; 
         }
     }
-    // 回退机制
     PlaySystemSound();
 }
 
@@ -138,7 +138,7 @@ int SendToTrash(const std::wstring& path) {
 }
 
 // =========================================================================================
-// 【核心功能：强力解除占用并删除 (自包含独立实现)】
+// 【核心功能：强力解除占用并删除】
 // =========================================================================================
 bool ForceUnlockAndDelete(const std::wstring& path) {
     std::wstring psCmd = L"powershell -NoProfile -Command \"$path = \'" + path + L"\'; "
@@ -183,15 +183,15 @@ void RenderFrame(HWND hwnd, HDC hdcBase) {
     int cx = width / 2;
     int cy = height / 2;
 
-    if (!isFileInUse && tick >= 35 && tick <= 45) {
+    if (!g_globalInUse && tick >= 35 && tick <= 45) {
         cx += (rand() % 30) - 15;
         cy += (rand() % 30) - 15;
     }
 
     // ------------------------------------------------------------------
-    // 特殊状态：文件被占用时，展示 10 秒长效提示画面
+    // 特殊状态：文件被占用时，每个屏幕均展示 10 秒长效提示画面
     // ------------------------------------------------------------------
-    if (isFileInUse) {
+    if (g_globalInUse) {
         SetBkMode(hdcMem, TRANSPARENT);
         
         SetTextColor(hdcMem, RGB(255, 80, 80));
@@ -257,16 +257,25 @@ void RenderFrame(HWND hwnd, HDC hdcBase) {
     // 阶段2：开火判定阶段 (精确的第 35 帧)
     // ------------------------------------------------------------------
     else if (tick == 35) {
-        int result = SendToTrash(targetFile); 
-        
-        if (result != 0) {
-            isFileInUse = true;
-            tick = 0; 
-            BitBlt(hdcBase, 0, 0, width, height, hdcMem, 0, 0, SRCCOPY);
-            SelectObject(hdcMem, hOld);
-            DeleteObject(hbmMem);
-            DeleteDC(hdcMem);
-            return; 
+        // 仅由第一个到达此帧的窗口执行一次删除尝试，避免多屏幕重复操作
+        static bool deletionAttempted = false;
+        if (!deletionAttempted) {
+            deletionAttempted = true;
+            int result = SendToTrash(targetFile);
+            if (result != 0) {
+                g_globalInUse = true;
+                tick = 0;
+                deletionAttempted = false; // 重置以便后续解锁尝试
+                // 通知所有屏幕窗口同步切换到占用提示状态
+                for (HWND h : g_allHwnds) {
+                    InvalidateRect(h, NULL, FALSE);
+                }
+                BitBlt(hdcBase, 0, 0, width, height, hdcMem, 0, 0, SRCCOPY);
+                SelectObject(hdcMem, hOld);
+                DeleteObject(hbmMem);
+                DeleteDC(hdcMem);
+                return;
+            }
         }
 
         for (int i = 0; i < 150; i++) {
@@ -344,32 +353,28 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CREATE: 
             SetLayeredWindowAttributes(hwnd, 0, 215, LWA_ALPHA); 
             SetTimer(hwnd, 1, 30, NULL); 
-            PlayTownAudio(); // 动画窗口弹出时检测并播放 town.mid 或备用音效
+            // 确保多屏同时弹出时只触发一次音乐播放
+            if (!g_audioStarted) {
+                g_audioStarted = true;
+                PlayTownAudio(); 
+            }
+            break;
+
+        case WM_APP_TRIGGER_EXPLOSION: // 多屏同步破局成功后的爆炸触发消息
+            tick = 35;
+            particles.clear();
             break;
 
         case WM_KEYDOWN:
             if (wParam == VK_ESCAPE) {
                 PostQuitMessage(0); 
             } 
-            else if (isFileInUse && (wParam == 'X' || wParam == 'x')) {
+            else if (g_globalInUse && (wParam == 'X' || wParam == 'x')) {
                 if (ForceUnlockAndDelete(targetFile)) {
-                    isFileInUse = false;
-                    tick = 35; 
-                    particles.clear();
-                    
-                    RECT rect;
-                    GetClientRect(hwnd, &rect);
-                    int cx = rect.right / 2;
-                    int cy = rect.bottom / 2;
-                    for (int i = 0; i < 150; i++) {
-                        float angle = (rand() % 360) * 3.14159f / 180.0f;
-                        float speed = (rand() % 45) + 15.0f; 
-                        Particle p;
-                        p.x = cx; p.y = cy;
-                        p.vx = cos(angle) * speed;
-                        p.vy = sin(angle) * speed;
-                        p.life = 255; 
-                        particles.push_back(p);
+                    g_globalInUse = false;
+                    // 广播通知所有屏幕窗口同步触发爆炸演出
+                    for (HWND h : g_allHwnds) {
+                        PostMessageW(h, WM_APP_TRIGGER_EXPLOSION, 0, 0);
                     }
                 }
             }
@@ -377,7 +382,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_TIMER:
             tick++;
-            if ((isFileInUse && tick > IN_USE_TOTAL_TICKS) || (!isFileInUse && tick > ANIM_TOTAL_TICKS)) {
+            if ((g_globalInUse && tick > IN_USE_TOTAL_TICKS) || (!g_globalInUse && tick > ANIM_TOTAL_TICKS)) {
                 KillTimer(hwnd, 1);
                 PostQuitMessage(0); 
             } else {
@@ -394,7 +399,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_DESTROY:
-            StopTownAudio(); // 动画消失/窗口销毁瞬间立刻停止音乐，实现戛然而止
+            StopTownAudio(); // 窗口销毁瞬间立刻停止音乐，实现戛然而止
             PostQuitMessage(0);
             break;
 
@@ -405,10 +410,48 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 // =========================================================================================
+// 【多屏幕枚举回调函数】
+// =========================================================================================
+struct MonitorData {
+    HINSTANCE hInstance;
+    WNDCLASSW* pwc;
+};
+
+BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
+    MonitorData* data = (MonitorData*)dwData;
+    MONITORINFOEXW mi;
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(hMonitor, &mi)) {
+        RECT rc = mi.rcMonitor;
+        HWND hwnd = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            L"MonsterDeleterClass", L"Monster Deleter",
+            WS_POPUP | WS_VISIBLE,
+            rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
+            NULL, NULL, data->hInstance, NULL
+        );
+        if (hwnd) {
+            g_allHwnds.push_back(hwnd);
+        }
+    }
+    return TRUE;
+}
+
+// =========================================================================================
 // 【程序入口点】
 // =========================================================================================
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     srand((unsigned int)time(NULL));
+
+    // 性能优化：在程序启动时预先检索一次 MIDI 文件，避免在动画触发时产生任何 I/O 延迟
+    wchar_t windir[MAX_PATH];
+    if (GetEnvironmentVariableW(L"WINDIR", windir, MAX_PATH) > 0) {
+        std::wstring midPath = std::wstring(windir) + L"\\Media\\town.mid";
+        if (GetFileAttributesW(midPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            g_hasTownMid = true;
+            g_cachedTownMidPath = midPath;
+        }
+    }
 
     int argc;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -442,18 +485,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.hCursor = LoadCursor(NULL, IDC_CROSS); 
     RegisterClassW(&wc);
 
-    vScreenX = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    vScreenY = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    vScreenWidth = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    vScreenHeight = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    // 遍历所有扩展显示器并在每个屏幕上独立创建动画窗口
+    MonitorData monData = { hInstance, &wc };
+    EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, (LPARAM)&monData);
 
-    HWND hwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-        L"MonsterDeleterClass", L"Monster Deleter",
-        WS_POPUP | WS_VISIBLE,
-        vScreenX, vScreenY, vScreenWidth, vScreenHeight,
-        NULL, NULL, hInstance, NULL
-    );
+    // 若未成功创建任何屏幕窗口（兜底保护），则回退创建单窗口
+    if (g_allHwnds.empty()) {
+        HWND hwnd = CreateWindowExW(
+            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            L"MonsterDeleterClass", L"Monster Deleter",
+            WS_POPUP | WS_VISIBLE,
+            0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+            NULL, NULL, hInstance, NULL
+        );
+        if (hwnd) g_allHwnds.push_back(hwnd);
+    }
 
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
